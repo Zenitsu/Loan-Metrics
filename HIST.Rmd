@@ -1,0 +1,31 @@
+---
+title: "Histograms by Lender Portfolio"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Import data }
+library(plyr)
+setwd("/Users/QiuPeilun/Desktop/Histograms")
+FILES <- c("Loans_2016.csv")
+D <- read.csv(FILES[1])
+D$User.Details.Full.Name<- NULL
+```
+
+
+```{r HIST, echo=FALSE}
+hist(C$Lender.Loan.Purchase.Number.of.Loans, breaks = 30, prob = TRUE,main="Histogram of Loans in Last Year", xlab="Loan Number", ylab="Density") 
+
+E <- D[D$Lender.Loan.Purchase.Number.of.Loans<5000,]
+C <- D[D$Lender.Loan.Purchase.Number.of.Loans<1000,]
+Casuals <- D[D$Lender.Loan.Purchase.Number.of.Loans<500,]
+
+lines(density(D$Lender.Loan.Purchase.Number.of.Loans, bw = .9))
+
+
+```
+

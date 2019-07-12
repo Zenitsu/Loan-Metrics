@@ -1,0 +1,366 @@
+---
+title: "Graphical Comparisons of Loan Quality Metrics"
+output: pdf_document
+---
+
+```{r mergeVars, echo=FALSE, warning=FALSE}
+library(plyr)
+VARNAMES <- c("Measures..Amount.4A..Amount.Raised"="Amount.Raised","Measures..Number.4A..Number.Raised"="Number.Raised","Measures..Calc.Average.Loan.Size"="Loan.Size")
+#setwd("./data")
+FILES <- c("Expiration.csv","Fundraising.csv","ImpactScores.csv","PAR30.csv","RISK.csv","Portfolio.csv","PartnerDetails.csv")
+D <- read.csv(FILES[1])
+for (file in FILES[2:length(FILES)]) D <- merge(D, read.csv(file), by="Partner.ID")
+setwd("..")
+
+write.csv(D,file="ImpactRiskPopularity.csv", row.names = FALSE)
+```
+
+```{r usefulFunctions, echo=FALSE, warning=FALSE}
+
+ #~ Packages
+library("ggplot2")
+ #~ Useful functions
+topcode <- function(X,at=3,method="std"){
+  if (method=="std") {
+    TOP <- mean(X)+at*(var(X)^.5)
+  } else if (method=="pct") {
+    TOP <- quantile(X,at,na.rm=TRUE)
+  }
+  X[X>TOP] <- TOP
+  return(X)
+}
+
+pretty.scatter <- function(df,x,y, title="Slope", show_coeff="lm_results",tc=c(FALSE,FALSE),topcode_method="std", se=TRUE, ...){
+  # Uses ggplot to scatter with ols line (w/ se's) and rug
+  # tc is a boolean pair for whether to topcode x and y respectively. If not FALSE, takes the "at" number.
+  if (tc[1]){
+      df[sprintf("%s_tc",x)] <- topcode(df[[x]], at=tc[1], method=topcode_method)
+      x <- sprintf("%s_tc",x)
+  }  
+  if (tc[2]){
+      df[sprintf("%s_tc",y)] <- topcode(df[[y]], at=tc[2], method=topcode_method)
+      y <- sprintf("%s_tc",y)
+  }
+  if (any(tc)){
+      tced <- sprintf("(censored at [%s,%s] %s)",tc[1],tc[2],topcode_method)
+  } else {tced <- ""}
+  PLOT <- ggplot(df, aes_string(x=x,y=y, ...)) 
+  PLOT <- PLOT + geom_point() + geom_smooth(method = lm, se=se)
+  PLOT <- PLOT + geom_rug()
+  
+  if (show_coeff=="lm_results"){
+    spec <- sprintf("%s ~ %s",y,x)
+    results <- summary(lm(spec, data.frame(df[y],df[x])))
+    B <- round(coef(results)[2,'Estimate'],3)
+    stars <- ""
+    for (t in c(1.962, 2.58, 3.30)){
+      if (t<abs(coef(results)[2,'t value'])) stars <- paste(stars,"*")
+    }
+    title <- bquote( .(title) ~ beta ~ "=" ~ .(B) ~ .(stars) ~ .(tced))
+    PLOT <- PLOT + ggtitle(title)}
+  return(PLOT)
+}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  #~ Taken from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+# Request for Feedback
+
+*This is a rough draft of a graphical analysis of the relationships among risk,
+ impact, and popularity. We're sharing this in hopes of getting feedback on what
+ other questions we might ask, what figures would be interesting to see, and
+ what needs to change in our approach. The big items that need to be fixed right
+ now are:*
+
+1. Some graphs and estimates need to be weighted by partners' volume or average
+   amount outstanding.
+2. Other graphs need to *control for* volume.
+3. Some partners may need to be excluded from one or another graph if their
+   reporting is inaccurate or their case is especially peculiar.
+
+Any other additions or caveats would be helpful. Also, if there's a more nuanced 
+way of thinking about these relationships, that's good to know. For example, can 
+we put numbers on how expirations *changed* when risk ratings have changed on the 
+site? Should the Risk-vs-Impact analysis be broken down by loan sector?
+
+# Introduction
+
+When it comes to the loans that go up on kiva.org, Kiva has several things that
+it cares about. The major priorities fall into four categories: Impact, Risk,
+Popularity, and Cost. This report is a first look at how each of these measures
+relate to one another. Ultimately, we want to answer questions like:
+
+- If we want to emphasize portfolio impact, do we have to accept higher risk?
+- Do lenders need to be nudged or convinced to fund high-impact partners, or are
+  they already popular?
+- Do *ex ante* risk metrics translate to higher risk outcomes *ex post*?
+- Are partners with poor risk ratings less popular?
+
+## A brief overview of the variables:
+
+### Impact: 
+
+*How valuable is this loan or service to borrowers?*
+
+  Our main variable measuring impact is the *Impact Score*. This combines rough
+  measures of:
+
+  1. **Targetting:** How poor are borrowers in a partner's portfolio?
+  2. **Process Quality:** How focused does a partner appear to be on borrowers'
+     welfare?
+  3. **Evidence:** How well does published evidence support the case that this
+     partner's products have an impact on borrowers' welfare?
+
+  Another report will dig into how much each of these metrics drive the final
+  impact scores and how they might be improved. For now, we take the Impact
+  Score Card as it is.
+  
+### Risk: 
+
+*How likely are lenders to be repaid when they fund this loan?*
+
+  Our main variables measuring risk are:
+
+  1. **Risk Rating:** This *ex ante* measure gives each partner a 1-5 rating of
+     the processes that make a portfolio risky.
+  2. **Percentage at Risk (30 days):** The percentage of a partner's portfolio
+     volume that is delinquent by at least 30 days.
+
+### Popularity: 
+
+*How likely are lenders to fund this loan when it's posted?*
+
+  Popularity is measured in two simple ways. First is *expiration rate*, the portion
+  of loans posted by a partner that expire. Second is *fundraising velocity*,
+  the volume going to a given loan per day on average.
+
+- **Cost:** How costly is it to Kiva to get this loan from partner to lender?
+
+  For the moment, this report doesn't deal with cost. [[Comments welcome!]] A
+  future draft will dig into the trade-offs of cost with risk and impact, which
+  is important for deciding where our time and resources go. Ideally, this will
+  also integrate some estimates of how tip rates vary with loans or partners.
+
+# The graphs:
+
+For now, this is a simple look at graphical associations. Each graph is a
+scatter plot of two variables, with a best-fit line and shaded confidence
+intervals for each. The hash marks on each axis correspond to a single point,
+showing the distribution of each variable.
+
+The data includes all partners in Stage 9 (neither cancelled nor paused). Star 
+ratings are taken from the integrated cost-risk-impact-popularity (CRIP)
+model. Impact Scores are taken from the updated impact scorecard model. PAR30,
+expirations, and velocity are taken from a looker report (INCLUDE LINK).
+Velocity is reported in logs, since it seems to be distributed exponentially,
+with partners distributed across different orders of magnitude. Some outliers
+are excluded for expirations and velocity.
+
+Here are some interesting graphs for Risk and Impact at a glance:
+
+```{r make_graphs, echo=FALSE, warning=FALSE}
+
+ #~ Read in data and clean up strange or missing values
+D <- read.csv("ImpactRiskPopularity.csv")
+D$Velocity[D$Velocity>4000] <- NA
+D$PAR30[D$PAR30>.5] <- NA
+D["lnVelocity"] <- log(D$Velocity)
+
+ #~ Make Plots
+Impact.PAR30        <- pretty.scatter(D, "Impact.Score",     "PAR30")
+Impact.Expiration   <- pretty.scatter(D, "Impact.Score",     "Expiration.Rate")
+Impact.Velocity     <- pretty.scatter(D, "Impact.Score",     "lnVelocity")
+Risk.Impact         <- pretty.scatter(D, "Risk.Rating",      "Impact.Score")
+Risk.PAR30          <- pretty.scatter(D, "Risk.Rating",      "PAR30")
+Risk.Expiration     <- pretty.scatter(D, "Risk.Rating",      "Expiration.Rate")
+Risk.Velocity       <- pretty.scatter(D, "Risk.Rating",      "lnVelocity")
+PAR30.Expiration     <- pretty.scatter(D, "PAR30", "Expiration.Rate")
+Velocity.PAR30      <- pretty.scatter(D, "lnVelocity",       "PAR30")
+Velocity.Expiration <- pretty.scatter(subset(D,Expiration.Rate!=0), "lnVelocity", "Expiration.Rate")
+multiplot(Risk.Impact, Risk.PAR30, Risk.Velocity, Impact.Expiration, Impact.PAR30, Impact.Velocity,cols=2)
+```
+
+# Risk Ratings versus Impact Scores
+
+The relationship between risk ratings and impact scores doesn't look strong.
+There is a negative and statistically significant association between them,
+which looks like it's driven largely by there being very few high-impact (>7.5)
+partners with high (>3) risk ratings. My takeaway would be that that one won't
+find perfectly secure investments among promising partners serving poor
+communities, but that these partners are still terribly risky.
+
+```{r risk-vs-impact, echo=FALSE, warning=FALSE}
+Risk.Impact
+```
+
+# Impact Scores versus PAR30
+
+The distribution of PAR30 is almost entirely under 5-10%. There's no indication
+that average PAR30, or the probability of a partner rising above 15%, varies
+with impact scores. Not shown is that this relationship doesn't seem to change
+when we exclude partners with no loans at risk.
+
+```{r impact-vs-par30, echo=FALSE, warning=FALSE}
+Impact.PAR30
+```
+
+# Impact Scores versus Popularity
+
+Finally the next two graphs consider the relationship between impact and
+popularity. Even given a statistically certain and economically significant
+ranking of impact among partners, the question would remain whether Kiva's
+platform would allow for impact-oriented reallocation. Arguably the most
+reliable and effective means of making marginal reallocations would be to direct
+matching funds and modify the website's sorting algorithm. Nonetheless, direct
+communication with lenders will be an important part of Kiva's message and
+re-allocation strategy, so it is important to know whether lenders are averse,
+indifferent, or fond of higher impact partners. 
+
+Encouragingly, we see here that expirations aren't more likely for high-impact
+partners, and fundraising velocity is essentially the same across the distribution.
+
+```{r impact-vs-expiration, echo=FALSE, warning=FALSE}
+Impact.Expiration
+```
+    
+```{r impact-vs-velocity, echo=FALSE, warning=FALSE}
+Impact.Velocity
+```
+
+# Risk versus PAR30
+
+Moving away from risk, it is worth noting that our risk metrics are
+fundamentally different. Our 1-5 risk rating is an *ex ante* measure that uses
+partner and loan characteristics to estimate the riskiness of investing with the
+organization. PAR30 is an *ex post* measure that looks at actual historical
+portfolio performance. There are several reasons to use an *ex ante* metric. It
+behooves us to try to identifiy high-risk partners ahead of time, before a
+significant portion of their portfolio is delinquent. These process
+characteristics are also important in themselves for Kiva's product even for
+high-performing portfolios. This is especially the case if Kiva takes seriously
+their role in pushing for good practices and quality products in the pro-poor
+financial service sector. Nonetheless, the predictive performance of the star
+ratings is an important measure of its value.
+
+(NOTE: This takes PAR30 in the past 24-months and compares it to risk ratings
+today. If we want to understand ppredictive performance, we may want to look at
+risk ratings 24 months ago...)
+
+Looking simply at this association, we see that risk ratings are indeed
+correlated with PAR30 rates. Each star seems to correspond with roughly a 2%
+reduction. This is driven largely by the fact that partners with PAR > 10% are
+much more common among one- and two-star partners than among 3-5 star partners.
+
+
+```{r risk-vs-par30, echo=FALSE, warning=FALSE}
+Risk.PAR30
+```
+
+# Risk versus Popularity
+
+There are experiments we could run to actually understand how users respond to
+risk. For example, if a partner's risk rating is going to change, we could
+randomly phase that change in on the site to see its marignal effect on velocity
+and expiration. Once we have public-facing impact metrics, the same experiments
+can be run on them. But I digress.
+
+It's interesting to see that expiration rates actually go up on average 3% for
+each star. We could speculate that expiration and star ratings may both be
+closely associated with total volume posted by a partner. Our next draft will
+offer up the residual plot controlling for volume to check. Similarly, vlocity
+is strongly decreasing in risk rating, suggesting we should control for the number
+of loans posted per partner.
+
+```{r risk-vs-expiration, echo=FALSE, warning=FALSE}
+Risk.Expiration
+```
+
+```{r risk-vs-velocity, echo=FALSE, warning=FALSE}
+Risk.Velocity
+```
+
+#PAR30 versus Popularity
+
+Switching to PAR30, we see to precise or strong correlation between the two, but
+note that expiration rates generally look higher for partners with low at-risk
+rates. It may be of course that high at-risk rates are followed by a drop in
+volume, pointing again at the need to show residual plots controlling for this
+before offering any bold explanations.
+
+```{r par30-vs-expiration, echo=FALSE, warning=FALSE}
+PAR30.Expiration
+```
+
+There appears to be even less to say about the relationship between PAR30 and
+velocity. Lenders fund partners with higher at-risk rates in roughly the same
+way as low-risk partners.
+
+```{r velocity-vs-par30, echo=FALSE, warning=FALSE}
+Velocity.PAR30
+```
+
+#Funding Rate versus Expiration Rate
+
+Finally, as a simple validation exercise, our popularity metrics do at least
+track each other. A doubling of the funding velocity is associated with a 4%
+drop in expirations.
+
+```{r velocity-vs-expiration, echo=FALSE, warning=FALSE}
+Velocity.Expiration
+```
+
+# Still more graphs
+
+HIST <- qplot(D$Impact.Score ,geom="histogram",binwidth = 0.5,main = "Histogram for Total Impact Score", )
+
+```{r distribution-graphs, echo=FALSE, warning=FALSE}
+
+HIST    <- c(Total=ggplot(D,aes(x=Impact.Score))    + geom_histogram(aes(fill=..count..),binwidth=.3)  + ggtitle("Histogram for Total Impact Score"))
+HIST["MPI"]     <- ggplot(D,aes(x=Targeting.Score)) + geom_histogram(aes(fill=..count..),binwidth=1.3) + ggtitle("Histogram for Poverty Targeting Score")
+HIST["Product"] <- ggplot(D,aes(x=Product.Score))   + geom_histogram(aes(fill=..count..),binwidth=1.3) + ggtitle("Histogram for Product Quality Score")
+HIST["Process"] <- ggplot(D,aes(x=Survey.Score))    + geom_histogram(aes(fill=..count..),binwidth=1.3) + ggtitle("Histogram for Process Quality Score")
+
+by.Tier    <- c(Total=ggplot(D,aes(factor(Tier),Impact.Score))    + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Total Impact Score by Tier"))
+by.Tier["MPI"]     <- ggplot(D,aes(factor(Tier),Targeting.Score)) + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Poverty Targeting Impact Score by Tier")
+by.Tier["Product"] <- ggplot(D,aes(factor(Tier),Product.Score))   + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Product Quality Impact Score by Tier")  
+by.Tier["Process"] <- ggplot(D,aes(factor(Tier),Survey.Score))    + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Process Quality Impact Score by Tier")  
+by.Tier["MPI"]
+by.Region    <- c(Total=ggplot(D,aes(factor(Region),Impact.Score))    + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Total Impact Score by Region"))
+by.Region["MPI"]     <- ggplot(D,aes(factor(Region),Targeting.Score)) + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Poverty Targeting Impact Score by Region")
+by.Region["Product"] <- ggplot(D,aes(factor(Region),Product.Score))   + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Product Quality Impact Score by Region")  
+by.Region["Process"] <- ggplot(D,aes(factor(Region),Survey.Score))    + geom_boxplot()+geom_jitter(width=.07) + ggtitle("Process Quality Impact Score by Region")  
+```

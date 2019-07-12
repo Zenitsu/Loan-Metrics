@@ -1,0 +1,234 @@
+---
+title: "Graphical Comparisons of Loan Quality Metrics"
+output: pdf_document
+---
+    
+```{r mergeVars, echo=FALSE, warning=FALSE}
+#setwd("./data")
+#FILES <- c("Expiration.csv","Fundraising.csv","ISC.csv","PAR30.csv","RISK.csv","Portfolio.csv")
+#D <- read.csv(FILES[1])
+#for (file in FILES[2:length(FILES)]) D <- merge(D, read.csv(file), by="Partner.ID")   
+#setwd("..")
+#write.csv(D,file="ImpactRiskPopularity.csv", row.names = FALSE)
+```
+
+```{r usefulFunctions, echo=FALSE, warning=FALSE}
+
+ #~ Packages
+library("ggplot2")
+ #~ Useful functions
+topcode <- function(X,at=3,method="std"){
+  if (method=="std") {
+    TOP <- mean(X)+at*(var(X)^.5)
+  } else if (method=="pct") {
+    TOP <- quantile(X,at)
+  }
+  X[X>TOP] <- TOP
+  return(X)
+}
+pretty.scatter <- function(df,x,y, title="Slope", show_coeff="lm_results",tc=c(FALSE,FALSE),topcode_method="std", se=TRUE, ...){
+  # Uses ggplot to scatter with ols line (w/ se's) and rug
+  # tc is a boolean pair for whether to topcode x and y respectively. If not FALSE, takes the "at" number.
+  if (tc[1]){
+      df[sprintf("%s_tc",x)] <- topcode(df[[x]], at=tc[1], method=topcode_method)
+      x <- sprintf("%s_tc",x)
+  }  
+  if (tc[2]){
+      df[sprintf("%s_tc",y)] <- topcode(df[[y]], at=tc[2], method=topcode_method)
+      y <- sprintf("%s_tc",y)
+  }
+  if (any(tc)){
+      tced <- sprintf("(censored at [%s,%s] %s)",tc[1],tc[2],topcode_method)
+  } else {tced <- ""}
+  PLOT <- ggplot(df, aes_string(x=x,y=y, ...)) 
+  PLOT <- PLOT + geom_point() + geom_smooth(method = lm, se=se)
+  PLOT <- PLOT + geom_rug()
+  
+  if (show_coeff=="lm_results"){
+    spec <- sprintf("%s ~ %s",y,x)
+    results <- summary(lm(spec, data.frame(df[y],df[x])))
+    B <- round(coef(results)[2,'Estimate'],3)
+    stars <- ""
+    for (t in c(1.962, 2.58, 3.30)){
+      if (t<abs(coef(results)[2,'t value'])) stars <- paste(stars,"*")
+    }
+    title <- bquote( .(title) ~ beta ~ "=" ~ .(B) ~ .(stars) ~ .(tced))
+    PLOT <- PLOT + ggtitle(title)}
+  return(PLOT)
+}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  #~ Taken from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+# Request for Feedback
+
+The Impact Scorecard is comprised of three componenets: The Survey Score, 
+the MPI score, and the Product Score. However these componenets are later weighted 
+and bucketed into values ranging from a scale of 1 to 12 for maximum impact. 
+The final product score is a result of these bucketed values.
+This is a rough draft of a graphical analysis of the relationships among the 
+bucketed scores of the Scorecard's three major components. We're sharing this in 
+hopes of getting feedback on what other questions we might ask, what figures would 
+be interesting to see, and what needs to change in our approach.  
+
+# Introduction
+
+A key question we should be asking in regards to the final impact scores is if the 
+weightings should be equal to one another, or if any relationships between the scorecard components 
+will change given small to drastic changes in the weightings.
+This report is a look at how each of the Imapct Scorecard components
+relate to one another, and also serves to make propositions on how changes in the scorecard weightings may affect the volatility of the graphs. Ultimately, we want to answer questions like:
+
+- If we want to emphasize portfolio impact, do we have to accept a "higher" and "lower"
+  weighting for each scorecard componant based its relevance to the overall impact score?
+  
+-Would creating a volatility score based on experimental shifts in scorecard metrics serve any    useful purpose in future drafts of the imapct scorecard?
+
+## A brief overview of the variables:
+
+### Impact: 
+
+*How valuable is this loan or service to borrowers?*
+
+  Our main variable measuring impact is the *Impact Score*. This combines rough
+  measures of:
+
+  1. **Targetting:** How poor are borrowers in a partner's portfolio? This is reflected by the 
+                     MPI score with both a raw and bucketed value.
+  2. **Process Quality:** How focused does a partner appear to be on borrowers'
+                          welfare? This is reflected by the survey monkey data and the 
+                          impact survey score with both a raw and bucketed value.
+  3. **Evidence:** How well does published evidence support the case that this
+                   partner's products have an impact on borrowers' welfare? This is reflected 
+                   by the loan product score with both a raw and bucketed value.
+
+  The big question here is: How much "weighted value" do we place on the three main components that 
+  drive the final impact scores and how they might be improved? In addition, how might this 
+  " weighted value" change depending on whether the raw or bucketed values are being measured?
+  
+
+# The graphs:
+
+This is a simple look at graphical associations, this time between the 
+Scorecard's primary three metrics and the scores used for them: Targetting, 
+Process Quality, and Evidence. Each graph is a scatter plot of two variables, 
+with a best-fit line and shaded confidence intervals for each. The hash marks 
+on each axis correspond to a single point, showing the distribution of each variable.
+
+Impact Scores and components are taken from the updated impact scorecard model.
+We will be keeping the bucketed and raw comparisons separate since one goal is to look at
+how bucketing the raw scores may affect anything.
+
+Here are some interesting graphs comparing all the bucketed scores:
+
+```{r make_graphs, echo=FALSE, warning=FALSE}
+
+ #~ Read in data 
+D <- read.csv("ComponentScores.csv")
+
+ #~ Make Plots
+BucketSurvey.BucketMPI      <- pretty.scatter(D, "Bucket.Survey.Score",     "Bucket.MPI.Score")
+BucketSurvey.BucketProduct  <- pretty.scatter(D, "Bucket.Survey.Score",     "Bucket.Product.Score")
+BucketSurvey.Total          <- pretty.scatter(D, "Bucket.Survey.Score",     "Total.Score")
+BucketMPI.BucketProduct     <- pretty.scatter(D, "Bucket.MPI.Score",      "Bucket.Product.Score")
+BucketMPI.Total             <- pretty.scatter(D, "Bucket.MPI.Score",      "Total.Score")
+BucketProduct.Total         <- pretty.scatter(D, "Bucket.Product.Score",      "Total.Score")
+
+multiplot(BucketSurvey.BucketMPI, BucketSurvey.BucketProduct, BucketSurvey.Total, BucketMPI.BucketProduct, BucketMPI.Total, BucketProduct.Total,cols=2)
+```
+
+# Bucket Survey Score versus Bucket MPI score
+
+The relationship between bucketed survey scores and bucketed MPI scores is very weak,
+with the distribution of scores very evenly spread out over the graph.
+
+```{r BucketSurvey-vs-BucketMPI, echo=FALSE, warning=FALSE}
+
+BucketSurvey.BucketMPI
+```
+
+# Bucket Survey Score versus Bucket Product Score
+
+Bucketed survey data versus product data is also a very weak relationship with virtually no concentration of data points anywhere. 
+
+```{r BucketSurvey-vs-BucketProduct, echo=FALSE, warning=FALSE}
+
+BucketSurvey.BucketProduct
+```
+
+# Bucket Survey Score versis Bucketed Impact Score
+Expectedly, a more linearly relationship with a strong confidence interval is shown when comparing the bucketed survey score to the total score. The distribution of points on the graphs is still
+quite even. However, the strength between the impact score and the process quality will be more interesting if a stronger relationship is shown between the impact score and another component.
+
+
+```{r BucketSurvey-vs-Total, echo=FALSE, warning=FALSE}
+BucketSurvey.Total  
+```
+    
+# Bucket MPI Score versus Bucket Product Score     
+ A fairly identical, weak relationship between Bucket MPU and Bucket Product Scores. Distribution 
+ of data points is even again with virtually no relationship present.
+    
+```{r BucketMPI-vs-BucketProduct, echo=FALSE, warning=FALSE}
+BucketMPI.BucketProduct
+```
+
+# Bucket MPI versus Bucketed Impact Score
+There seems to be a sightly stronger correlation between the MPI and final imapct score  
+compared to survey data. What is interesting is despite this, the confidence band is considerably smaller.
+
+
+```{r BucketMPI-vs-ImapctScore, echo=FALSE, warning=FALSE}
+BucketMPI.Total 
+```
+
+# Bucketed Product Score versus Total
+Confidence band is of medium length but overall, the strength of the relationship is linear 
+and similar shaped to the other bucketed componenets.
+
+
+```{r Bucketed Product-vs-Total, echo=FALSE, warning=FALSE}
+BucketProduct.Total 
+```
+
+
+
+
+```{r Placeholder, echo=FALSE, warning=FALSE}
+
+```
+

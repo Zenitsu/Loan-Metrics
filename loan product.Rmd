@@ -1,0 +1,310 @@
+---
+title: "Loan Product Script"
+output: pdf_document
+---
+
+Use the comments and guidelines in this script to pull data on a loan product level
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r usefulFunctions, echo=FALSE, warning=FALSE}
+#install.packages("data.table")
+ #~ Packages
+library("ggplot2")
+ #~ Useful functions
+topcode <- function(X,at=3,method="std"){
+  if (method=="std") {
+    TOP <- mean(X)+at*(var(X)^.5)
+  } else if (method=="pct") {
+    TOP <- quantile(X,at, na.rm=TRUE)
+  }
+  X[X>TOP] <- TOP
+  return(X)
+}
+
+pretty.scatter <- function(df,x,y, title="Slope", show_coeff="lm_results",tc=c(FALSE,FALSE),topcode_method="std", se=TRUE, ...){
+  # Uses ggplot to scatter with ols line (w/ se's) and rug
+  # tc is a boolean pair for whether to topcode x and y respectively. If not FALSE, takes the "at" number.
+  if (tc[1]){
+      df[sprintf("%s_tc",x)] <- topcode(df[[x]], at=tc[1], method=topcode_method)
+      x <- sprintf("%s_tc",x)
+  }  
+  if (tc[2]){
+      df[sprintf("%s_tc",y)] <- topcode(df[[y]], at=tc[2], method=topcode_method)
+      y <- sprintf("%s_tc",y)
+  }
+  if (any(tc)){
+      tced <- sprintf("(censored at [%s,%s] %s)",tc[1],tc[2],topcode_method)
+  } else {tced <- ""}
+ 
+  
+  mean<-mean(D$Number.of.Loans[D$Number.of.Loans>0],na.rm=TRUE)
+  bubble.size<-.2*D$Number.of.Loans/mean  
+
+  
+  PLOT <- ggplot(df, aes_string(x=x,y=y, ...)) 
+  PLOT <- PLOT + geom_point(size=bubble.size) + geom_smooth(method = lm, se=se)
+  PLOT <- PLOT + geom_rug()
+  PLOT <- PLOT + scale_size_area(max_size = 5)
+  
+  if (show_coeff=="lm_results"){
+    spec <- sprintf("%s ~ %s",y,x)
+    results <- summary(lm(spec, data.frame(df[y],df[x])))
+    B <- round(coef(results)[2,'Estimate'],3)
+    stars <- ""
+    for (t in c(1.962, 2.58, 3.30)){
+      if (t<abs(coef(results)[2,'t value'])) stars <- paste(stars,"*")
+    }
+    title <- bquote( .(title) ~ beta ~ "=" ~ .(B) ~ .(stars) ~ .(tced))
+    PLOT <- PLOT + ggtitle(title)}
+  return(PLOT)
+}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  #~ Taken from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+
+Step 1: Download an updated version of the Product Level Data Set from the Looker Query "Loan Product Metrics Base Query" : https://kiva.looker.com/looks/4403
+
+Step 2: Truncate the last 3 characters of each Salesforce ID
+
+Step 3: Download the impact Scorecard page titled "Loan Theme Research Scores" and make Sure to paste values only
+
+Step 4: Merge Loan Product & ISC together
+
+Step 5: Download Expirations, and Funding Velcoity & merge with Loan Product
+
+Step 6: Download ISC with MPI, IS, and Survey Score
+
+Step 7: Merge these spreadhseets by Partner ID in a one to many method
+
+```{r Generate Loan Product Data, echo=FALSE, warning=FALSE}
+library(plyr)
+library(data.table)
+loan_theme<-read.csv("Loan_Theme.csv")
+
+VARNAMES <- c("Loan.Theme.Loan.Theme.Salesforce.ID"="Salesforce.ID","Partner.Details.Field.Partner.Name"="Partner.Name","Loan.Geography.Country.Name"="Loan.Country","Loan.Geography.IRS.Region"="Loan.IRS","Loan.Theme.Theme.Weighted.Average.APR"="Loan.APR","Measures..Other.Number.of.Loans"="Number.of.Loans","Measures..Other.Amount.of.Loans..Disbursed.Value."="Loan.Volume", "Measures..Delinquency.PAR...1..Months"="PAR.30",
+"Measures..Delinquency.PAR...3..Months"="PAR.90", "Measures..Delinquency.PAR...6..Months"="PAR.180")
+loan_theme <- rename(loan_theme, replace=VARNAMES)
+
+loan_theme$Salesforce.ID<-gsub('.{3}$', '', loan_theme$Salesforce.ID)
+
+ISC_Sheet<-read.csv("ISC_Sheet.csv")
+Loan_Product<- merge(ISC_Sheet, loan_theme, by = "Salesforce.ID", all=TRUE)
+
+ISC_MPI_Sheet<-read.csv("ISC_MPI_Sheet.csv")
+Loan_Product<- merge(ISC_MPI_Sheet, Loan_Product, by = "Partner.ID", all=TRUE)
+
+Expirations<-read.csv("Expirations_loan_product.csv")
+Expirations$Salesforce.ID<-gsub('.{3}$', '', Expirations$Salesforce.ID)
+Loan_Product<- merge(Expirations, Loan_Product, by = "Salesforce.ID", all=TRUE)
+
+Fundraising<-read.csv("Fundraising_loan_product.csv")
+Fundraising$Salesforce.ID<-gsub('.{3}$', '', Fundraising$Salesforce.ID)
+Loan_Product<-merge(Fundraising, Loan_Product, by = "Salesforce.ID", all=TRUE)
+
+```
+
+Step 8: Get Reporting Tags from Salesforce Report: 
+
+Step 9: Break up the tags
+
+```{r Break up Tags, echo=FALSE}
+
+ReportingTags<-read.csv("Reporting_Tags_Raw.csv", stringsAsFactors=FALSE)
+ReportingTagsOutput<-(setDT(ReportingTags)[,  lapply(.SD, paste, collapse = "; "), by = Salesforce.ID])
+```
+
+Step 10: Merge Spreadsheets
+
+```{r merge tags and loan theme data, echo=FALSE}
+
+ReportingTags<-read.csv("ReportingTagsOutput.csv")
+
+Loan_Product<- merge(ReportingTags, Loan_Product, by = "Salesforce.ID", all=TRUE)
+
+```
+
+
+
+```{r output, echo=FALSE}
+
+write.csv(Loan_Product, file = "Loan_Theme_file.csv")
+
+
+```
+
+
+# Request for Feedback
+
+Each partner offers a given set of loan products in one or more countries. Each loan product is given a theme name and marked with evidence-based reporting tags. This is a data set aggregating most loan quality metrics on a loan product level whereas the previous graphs served to observe relations between metrics on a partner level.
+
+We're sharing this in hopes of getting feedback on what other questions we might ask, what figures would be interesting to see, and what needs to change in our approach.  
+
+# Introduction
+
+Here we want to observe if any graphs between the loan quality metrics 
+will show a relation or a lack of relation on a loan product level versus the previous graphs which displayed these relationships on a partner level. These graphs serve to make propositions 
+on how changes in both the weighting variables and controlling for variables 
+may affect the importance of metrics and their significant relation to one another. 
+
+  
+# The graphs:
+
+This is a simple look at graphical associations, between the 
+Scorecard's primary three metrics, and loan quality metrics, but measured on a loan product level in contrast to a partner level.
+
+Targetting, Process Quality, and Evidence are still used but will be compared to more metrics such as weighted average loan theme APR.  
+Each pair of graphs contain scatter plots of two variables, 
+with a best-fit line and shaded confidence intervals for each. The hash marks 
+on each axis correspond to a single point, showing the distribution of each variable.
+However, now additional variables are weighted in bubble graphs with the weighted variable representing the size of a scatterplot point.
+
+Impact Scores and components are taken from the updated impact scorecard model.
+Evidence-based reporting tags are taken from Salesforce, and the other metrics are pulled from Looker.
+
+
+# Loan Quality Metrics Weighted by Number of Loans
+```{r product_bubble_graphs, echo=FALSE, warning=FALSE}
+
+#~ Read in data 
+D <- read.csv("Loan_Theme_file.csv")
+D$Fund.Velocity[D$Fund.Velocity>4000] <- NA
+D$PAR.1.Months[D$PAR.1.Months>.5] <- NA
+D["lnVelocity"] <- log(D$Fund.Velocity)
+# D <- subset(D, !is.na(Product.Score))
+# D <- D[!is.na(D$Product.Score),]
+
+ #~ Make Plots
+ProductScore.PAR30<-pretty.scatter(D, "PAR.1.Months", "Product.Score")
+ProductScore.PAR90<- pretty.scatter(D, "PAR.3.Months", "Product.Score")
+ProductScore.PAR180<- pretty.scatter(D, "PAR.6.Months", "Product.Score")
+ProductScore.AmountExpired<- pretty.scatter(D, "Amount.Expired", "Product.Score")
+ProductScore.NumberExpired<- pretty.scatter(D, "Number.Expired", "Product.Score")
+ProductScore.FundVelocity<-pretty.scatter(D, "Fund.Velocity", "Product.Score")
+ProductScore.LoanAPR<- pretty.scatter(D, "Product.Score", "Loan.APR")
+ProductScore.AmountofLoans<-pretty.scatter(D, "Amount.of.Loans", "Product.Score")
+ProductScore.NumberofLoans<-pretty.scatter(D, "Number.of.Loans", "Product.Score")
+
+
+multiplot(ProductScore.PAR30, ProductScore.PAR90, ProductScore.PAR180, ProductScore.AmountExpired, ProductScore.NumberExpired, ProductScore.FundVelocity, ProductScore.LoanAPR, ProductScore.AmountofLoans, ProductScore.NumberofLoans, cols=3)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+   pretty.scatter(D,"Product.Score","PAR.1.Months",tc=c(.99,.99),topcode_method =  "pct")   
+```
+For the relation between PAR 30 partners and product score, partners who have been at risk for about a quarter of a month, tend to have higer product scores compared to the partners at risk for the whole month.  This could be simply due to the majority concentration of partners who have not been at risk for long, but do not have extremely high potential for impact on client outcomes.
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.PAR90
+```
+PAR 90 appears to have data points inclusive of PAR30, but more tend to cluster around having moderate product scores in the 5-10 range, without ever becoming at risk. There are only a few outliers in the 15-25-30 range. This could suggest that Kiva's more common partners tend to have a product score "high enough" but are also more likely to not be at risk.       
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.PAR180
+```
+PAR 180's graph seems distributed the same way that the  PAR90, and PAR30 graphs are. Currently the few partners that do stay at risk for almost 6 months are pulling the graph's line in a such a way that the slope is very low. It is still reassuring to see that partners with low periods of risk tend to have moderately high product scores, while a few exceptional partners with no risk period have the highest scores.
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.AmountExpired
+```
+Overall, there does not seem to be an overall change in product score
+relative to the amount that expires. The bubble sizes remains consistent throughout the graph, alongside a slope of zero. However, the majority of loans are concentrated below an expiration threshold of 250,000, and the majority of loan products with a high product score tend to fall below this threshold as well. 
+
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.NumberExpired
+```
+Despite the slope of 0 which may indicate no realtionship, most loans tend to have both a low number of expirations and a moderate product score. As the number of expirations increases, the product score on average tends to be lower. Due to the fact that product score takes into account loan product attributes, that can help borrowers repay their loans on time (i.e. borrower protection practices), it would be expected that one would tend to see better product scores concentrated in the area with lower numbers of expirations.    
+
+```{r, echo=FALSE, warning=FALSE}
+pretty.scatter(D,"Product.Score","lnVelocity",tc=c(.99, FALSE),topcode_method = "pct")
+```
+There is a large number of loans that fall in the category of having a low product score but decently high velocity or funding rate. This initially seems counterintuitive because one would expect loan products with higher product score to contain more evidence-backed attributes and therefore considered a "safe" investment that would be popular among lenders. One explaination could be that there is in fact no discernable relationship between the amount of evidence backed loan attributes and loan popularity. Another hypothesis could be that lenders simply prefer the types of loans that contain a low product score. There could possibly be another attribute that loan products back by heavy evidence contain, which make them less popular, but that metric is not currently clear.
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.LoanAPR
+```
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.AmountofLoans
+```
+
+```{r, echo=FALSE, warning=FALSE}
+ProductScore.NumberofLoans
+```
+
+
+```{r impact_bubble_graphs, echo=FALSE, warning=FALSE}
+
+TotalScore.PAR30<-pretty.scatter(D, "Total.Score", "PAR.1.Months")
+TotalScore.PAR90<- pretty.scatter(D, "Total.Score", "PAR.3.Months")
+TotalScore.PAR180<- pretty.scatter(D, "Total.Score", "PAR.6.Months")
+TotalScore.AmountExpired<- pretty.scatter(D, "Total.Score", "Amount.Expired")
+TotalScore.NumberExpired<- pretty.scatter(D, "Total.Score", "Number.Expired")
+TotalScore.FundVelocity<-pretty.scatter(D, "Total.Score", "Fund.Velocity")
+
+multiplot(TotalScore.PAR30, TotalScore.PAR90, TotalScore.PAR180, TotalScore.AmountExpired, TotalScore.NumberExpired, TotalScore.FundVelocity, cols=2)
+
+TotalScore.LoanAPR<- pretty.scatter(D, "Total.Score", "Loan.APR")
+TotalScore.AmountofLoans<-pretty.scatter(D, "Total.Score", "Amount.of.Loans")
+
+multiplot(TotalScore.LoanAPR, TotalScore.AmountofLoans,cols=1)
+
+
+```
+
+```{r Residual_Graphs}
+#Control for total number of loans 
+# Can we get residual vectors with missing values for dropped observations?
+B = coefficients(lm("Product.Score ~ Number.of.Loans", D))
+D["Product.Score.resid"] <- D["Product.Score"] - (B[1]+B[2]*D["Number.of.Loans"])
+
+C = coefficients(lm("PAR.1.Months ~ Number.of.Loans", D))
+D["PAR30.resid"]<- D["PAR.1.Months"] - (C[1]+C[2]*D["Number.of.Loans"]) 
+D["lnPAR30.resid"] <- .001+log(D["PAR30.resid"])
+
+
+ProductScore.PAR30.resid<-pretty.scatter(D, "ProductScore", "ProductScore.resid")
+
+```
+
+
+
+
